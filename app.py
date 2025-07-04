@@ -52,6 +52,13 @@ def inject_custom_css():
         .info-log {
             color: #2196F3;
         }
+        .login-container {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            border-radius: 10px;
+            background-color: #1e1e1e;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -75,16 +82,29 @@ def inject_custom_css():
 
 # Login system
 def login():
+    st.markdown("<div class='login-container'>", unsafe_allow_html=True)
     st.title("🔒 Bot Monitor Login")
+    
+    # Initialize session state
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = 0
+    
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     
     if st.button("Login"):
         if username == "wolf" and password == "firas":
             st.session_state.logged_in = True
-            st.experimental_rerun()
+            st.session_state.login_attempts = 0
+            st.rerun()
         else:
-            st.error("Invalid credentials")
+            st.session_state.login_attempts += 1
+            if st.session_state.login_attempts >= 3:
+                st.error("Too many failed attempts. Please try again later.")
+            else:
+                st.error(f"Invalid credentials. Attempt {st.session_state.login_attempts}/3")
+    
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # Main application
 def main_app():
@@ -121,7 +141,7 @@ def main_app():
     # Control buttons
     col1, col2 = st.columns(2)
     start_btn = col1.button("🚀 Start Monitoring", key="start")
-    stop_btn = col2.button("🛑 Stop Monitoring", key="stop")
+    stop_btn = col2.button("🛑 Stop Monitoring", key="stop", disabled=not st.session_state.get('bot_monitor'))
     
     if start_btn and st.session_state.bot_monitor:
         if not st.session_state.bot_monitor.is_running:
@@ -146,21 +166,19 @@ def main_app():
     log_container = st.empty()
     
     # Update logs in real-time
-    while True:
-        if 'bot_monitor' in st.session_state and st.session_state.bot_monitor:
-            logs = st.session_state.bot_monitor.logs
-            if logs:
-                log_html = "<div class='log-table'>"
-                for log in logs[-20:]:  # Show last 20 logs
-                    log_class = "info-log"
-                    if "Success" in log or "Forwarded" in log:
-                        log_class = "success-log"
-                    elif "Error" in log or "Failed" in log:
-                        log_class = "error-log"
-                    log_html += f"<div class='log-entry {log_class}'>{log}</div>"
-                log_html += "</div>"
-                log_container.markdown(log_html, unsafe_allow_html=True)
-        time.sleep(1)
+    if 'bot_monitor' in st.session_state and st.session_state.bot_monitor:
+        logs = st.session_state.bot_monitor.logs
+        if logs:
+            log_html = "<div class='log-table'>"
+            for log in logs[-20:]:  # Show last 20 logs
+                log_class = "info-log"
+                if "Success" in log or "Forwarded" in log:
+                    log_class = "success-log"
+                elif "Error" in log or "Failed" in log:
+                    log_class = "error-log"
+                log_html += f"<div class='log-entry {log_class}'>{log}</div>"
+            log_html += "</div>"
+            log_container.markdown(log_html, unsafe_allow_html=True)
 
 # App flow
 def app():
